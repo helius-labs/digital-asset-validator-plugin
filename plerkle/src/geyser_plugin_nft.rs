@@ -350,10 +350,12 @@ impl GeyserPlugin for Plerkle<'static> {
                 msg.add_stream(SLOT_STREAM).await;
                 msg.add_stream(TRANSACTION_STREAM).await;
                 msg.add_stream(BLOCK_STREAM).await;
-                msg.set_buffer_size(ACCOUNT_STREAM, config.account_stream_size.unwrap_or(100_000_000)).await;
-                msg.set_buffer_size(SLOT_STREAM, config.slot_stream_size.unwrap_or(100_000)).await;
-                msg.set_buffer_size(TRANSACTION_STREAM, config.transaction_stream_size.unwrap_or(10_000_000)).await;
-                msg.set_buffer_size(BLOCK_STREAM, config.block_stream_size.unwrap_or(100_000)).await;
+                // Config load from env var does work.
+                // Will debug later, for now hardcode.
+                msg.set_buffer_size(ACCOUNT_STREAM, 300_000_000).await;
+                msg.set_buffer_size(SLOT_STREAM, 1_000).await;
+                msg.set_buffer_size(TRANSACTION_STREAM, 10_000_000).await;
+                msg.set_buffer_size(BLOCK_STREAM, 1_000).await;
                 let chan_msg = (recv, msg);
                 // Idempotent call to add streams.
                 messenger_workers.push(chan_msg);
