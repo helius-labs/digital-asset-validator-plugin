@@ -1,8 +1,10 @@
 use crate::{
-    error::MessengerError, ConsumptionType, Messenger, MessengerConfig, MessengerType, RecvData,
+    error::MessengerError, metric, ConsumptionType, Messenger, MessengerConfig, MessengerType,
+    RecvData,
 };
 use async_trait::async_trait;
 
+use cadence_macros::statsd_count;
 use log::*;
 use redis::{
     aio::ConnectionManager,
@@ -136,6 +138,9 @@ impl RedisMessenger {
             };
 
             if info.times_delivered > self.retries {
+                metric! {
+                    statsd_count!("plerkle.messenger.retries.exceeded", 1);
+                }
                 error!("Message has reached maximum retries {} for id", id);
                 ack_list.push(id.clone());
                 continue;
