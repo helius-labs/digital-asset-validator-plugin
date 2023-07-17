@@ -78,10 +78,8 @@ impl RedisMessenger {
             .await
             .map_err(|e| MessengerError::AutoclaimError { msg: e.to_string() })?;
 
-        id = result.0;
         let range_reply = result.1;
-
-        if id == "0-0" || range_reply.ids.is_empty() {
+        if range_reply.ids.is_empty() {
             // We've reached the end of the PEL.
             return Ok(Vec::new());
         }
