@@ -342,6 +342,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "771fe0050b883fcc3ea2359b1a96bcfbc090b7116eae7c3c512c7a083fdf23d3"
 
 [[package]]
+name = "bs58"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f5353f36341f7451062466f0b755b96ac3a9547e4d7f6b70d603fc721a7d7896"
+dependencies = [
+ "tinyvec",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1752,7 +1761,7 @@ version = "1.5.3"
 dependencies = [
  "async-trait",
  "base64 0.21.0",
- "bs58",
+ "bs58 0.4.0",
  "bytemuck",
  "cadence",
  "cadence-macros",
@@ -1786,11 +1795,13 @@ dependencies = [
  "async-mutex",
  "async-trait",
  "blake3",
+ "bs58 0.5.0",
  "cadence",
  "cadence-macros",
  "figment",
  "futures",
  "log",
+ "plerkle_serialization",
  "redis",
  "serde",
  "thiserror",
@@ -1801,7 +1812,7 @@ dependencies = [
 name = "plerkle_serialization"
 version = "1.5.3"
 dependencies = [
- "bs58",
+ "bs58 0.4.0",
  "chrono",
  "flatbuffers",
  "serde",
@@ -2373,7 +2384,7 @@ dependencies = [
  "Inflector",
  "base64 0.13.1",
  "bincode",
- "bs58",
+ "bs58 0.4.0",
  "bv",
  "lazy_static",
  "serde",
@@ -2433,7 +2444,7 @@ dependencies = [
  "ahash",
  "blake3",
  "block-buffer 0.9.0",
- "bs58",
+ "bs58 0.4.0",
  "bv",
  "byteorder",
  "cc",
@@ -2529,7 +2540,7 @@ dependencies = [
  "blake3",
  "borsh",
  "borsh-derive",
- "bs58",
+ "bs58 0.4.0",
  "bv",
  "bytemuck",
  "cc",
@@ -2604,7 +2615,7 @@ dependencies = [
  "bincode",
  "bitflags",
  "borsh",
- "bs58",
+ "bs58 0.4.0",
  "bytemuck",
  "byteorder",
  "chrono",
@@ -2650,7 +2661,7 @@ version = "1.14.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "66b1eae3692dcafb7e02ea1a463b7e387ed4ada840a324d3857fd7541c14cb0c"
 dependencies = [
- "bs58",
+ "bs58 0.4.0",
  "proc-macro2",
  "quote",
  "rustversion",
@@ -2667,7 +2678,7 @@ dependencies = [
  "base64 0.13.1",
  "bincode",
  "borsh",
- "bs58",
+ "bs58 0.4.0",
  "lazy_static",
  "log",
  "serde",

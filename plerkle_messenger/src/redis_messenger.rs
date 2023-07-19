@@ -1,6 +1,6 @@
 use crate::{
-    error::MessengerError, metric, ConsumptionType, Messenger, MessengerConfig, MessengerType,
-    RecvData,
+    error::MessengerError, log_dropped_msg::extract_id, metric, ConsumptionType, Messenger,
+    MessengerConfig, MessengerType, RecvData,
 };
 use async_trait::async_trait;
 
@@ -61,13 +61,13 @@ impl RedisMessenger {
         &mut self,
         stream_key: &'static str,
     ) -> Result<Vec<RecvData>, MessengerError> {
-        let mut id = "0-0".to_owned();
+        let id = "0-0".to_owned();
         let mut xauto = cmd("XAUTOCLAIM");
         xauto
             .arg(stream_key)
             .arg(self.consumer_group_name.clone())
             .arg(self.consumer_id.as_str())
-            // We only reclaim items that have been idle for at least 2 sec.
+            // We only reclaim items that have been idle for at least 'idle_timeout' ms.
             .arg(self.idle_timeout)
             .arg(id.as_str())
             .arg("COUNT")
@@ -89,8 +89,7 @@ impl RedisMessenger {
         let l = range_reply.ids.last().unwrap();
 
         // We need to use `xpending_count` to get a `StreamPendingCountReply` which
-        // // contains information about the number of times a message has been
-        // // delivered.
+        // contains information about the number of times a message has been delivered
         let pending_result: StreamPendingCountReply = self
             .connection
             .xpending_count(
@@ -136,6 +135,17 @@ impl RedisMessenger {
             };
 
             if info.times_delivered > self.retries {
+                // --------------------------------------------------------------------------------
+                let extracted_id = extract_id(bytes, stream_key);
+                match extracted_id {
+                    Ok(id) => {
+                        log!(target: "inspect_dropped_msg", Level::Warn, "{} ID: {}", stream_key, id,);
+                    }
+                    Err(e) => {
+                        log!(target: "inspect_dropped_msg", Level::Warn, "{}", e)
+                    }
+                }
+                // ---------------------------------------------------------------------------------
                 metric! {
                     statsd_count!("plerkle.messenger.retries.exceeded", 1);
                 }
