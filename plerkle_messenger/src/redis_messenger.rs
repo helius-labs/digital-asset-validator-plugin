@@ -139,10 +139,10 @@ impl RedisMessenger {
                 let extracted_id = extract_id(bytes, stream_key);
                 match extracted_id {
                     Ok(id) => {
-                        log!(target: "inspect_dropped_msg", Level::Warn, "{} ID: {}", stream_key, id,);
+                        error!(target: "inspect_dropped_msg", "{} ID: {}", stream_key, id,);
                     }
                     Err(e) => {
-                        log!(target: "inspect_dropped_msg", Level::Warn, "{}", e)
+                        error!(target: "inspect_dropped_msg", "{}", e)
                     }
                 }
                 // ---------------------------------------------------------------------------------
