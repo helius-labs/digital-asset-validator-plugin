@@ -9,7 +9,7 @@ use figment::{providers::Env, Figment};
 use flatbuffers::FlatBufferBuilder;
 use plerkle_messenger::{
     select_messenger, MessengerConfig, ACCOUNT_STREAM, BLOCK_STREAM, SLOT_STREAM,
-    TRANSACTION_STREAM,
+    TRANSACTION_STREAM, ACC_BACKFILL, TXN_BACKFILL
 };
 use plerkle_serialization::serializer::{
     serialize_account, serialize_block, serialize_transaction,
@@ -37,7 +37,7 @@ use tokio::{
     runtime::{Builder, Runtime},
     time::Instant,
 };
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, trace};
 
 struct SerializedData<'a> {
     stream: &'static str,
@@ -129,6 +129,8 @@ pub struct PluginConfig {
     pub slot_stream_size: Option<usize>,
     pub transaction_stream_size: Option<usize>,
     pub block_stream_size: Option<usize>,
+    pub acc_backfill_stream_size: Option<usize>,
+    pub txn_backfill_stream_size: Option<usize>,
 }
 
 const NUM_WORKERS: usize = 5;
@@ -350,10 +352,14 @@ impl GeyserPlugin for Plerkle<'static> {
                 msg.add_stream(SLOT_STREAM).await;
                 msg.add_stream(TRANSACTION_STREAM).await;
                 msg.add_stream(BLOCK_STREAM).await;
+                msg.add_stream(ACC_BACKFILL).await;
+                msg.add_stream(TXN_BACKFILL).await;
                 msg.set_buffer_size(ACCOUNT_STREAM, config.account_stream_size.unwrap_or(100_000_000)).await;
                 msg.set_buffer_size(SLOT_STREAM, config.slot_stream_size.unwrap_or(100_000)).await;
                 msg.set_buffer_size(TRANSACTION_STREAM, config.transaction_stream_size.unwrap_or(10_000_000)).await;
                 msg.set_buffer_size(BLOCK_STREAM, config.block_stream_size.unwrap_or(100_000)).await;
+                msg.set_buffer_size(ACC_BACKFILL, config.acc_backfill_stream_size.unwrap_or(100_000_000)).await;
+                msg.set_buffer_size(TXN_BACKFILL, config.txn_backfill_stream_size.unwrap_or(10_000_000)).await;
                 let chan_msg = (recv, msg);
                 // Idempotent call to add streams.
                 messenger_workers.push(chan_msg);
@@ -429,7 +435,7 @@ impl GeyserPlugin for Plerkle<'static> {
         slot: u64,
         is_startup: bool,
     ) -> solana_geyser_plugin_interface::geyser_plugin_interface::Result<()> {
-        if !self.handle_startup && is_startup {
+        if  is_startup && !self.handle_startup {
             return Ok(());
         }
         let rep: plerkle_serialization::solana_geyser_plugin_interface_shims::ReplicaAccountInfoV2;
@@ -486,7 +492,7 @@ impl GeyserPlugin for Plerkle<'static> {
             statsd_count!("account_seen_event", 1, "owner" => &owner, "is_startup" => &s);
         };
         let data = SerializedData {
-            stream: ACCOUNT_STREAM,
+            stream: ACC_BACKFILL,
             builder,
             seen_at: seen,
         };
