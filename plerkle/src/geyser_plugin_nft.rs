@@ -533,8 +533,12 @@ impl GeyserPlugin for Plerkle<'static> {
             let s = is_startup.to_string();
             statsd_count!("account_seen_event", 1, "owner" => &owner, "is_startup" => &s);
         };
+        let stream_key = match is_startup {
+            true => ACC_BACKFILL,
+            false => ACCOUNT_STREAM,
+        };
         let data = SerializedData {
-            stream: ACC_BACKFILL,
+            stream: stream_key,
             builder,
             seen_at: seen,
         };
