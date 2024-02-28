@@ -1,6 +1,7 @@
 use crate::{
-    error::MessengerError, metric, ConsumptionType, Messenger, MessengerConfig, MessengerType,
-    RecvData,
+    error::MessengerError, log_dropped_msg::extract_id, metric, ConsumptionType, Messenger,
+    MessengerConfig, MessengerType, RecvData, ACCOUNT_STREAM, ACC_BACKFILL, TRANSACTION_STREAM,
+    TXN_BACKFILL,
 };
 use async_trait::async_trait;
 
@@ -41,6 +42,7 @@ pub struct RedisMessenger {
     retries: usize,
     batch_size: usize,
     idle_timeout: usize,
+    #[allow(dead_code)]
     message_wait_timeout: usize,
     consumer_group_name: String,
     pipeline_size: usize,
@@ -61,7 +63,7 @@ impl RedisMessenger {
         &mut self,
         stream_key: &'static str,
     ) -> Result<Vec<RecvData>, MessengerError> {
-        let mut id = "0-0".to_owned();
+        let id = "0-0".to_owned();
         let mut xauto = cmd("XAUTOCLAIM");
         xauto
             .arg(stream_key)
@@ -136,11 +138,41 @@ impl RedisMessenger {
             };
 
             if info.times_delivered > self.retries {
-                metric! {
-                    statsd_count!("plerkle.messenger.retries.exceeded", 1);
-                }
                 error!("Message has reached maximum retries {} for id", id);
                 ack_list.push(id.clone());
+
+                // Publish metrics for dropped message.
+                let extracted_id = extract_id(bytes, stream_key);
+                match extracted_id {
+                    Ok(id) => {
+                        let id = id.unwrap_or("UNKNOWN_ID".into());
+                        error!(target: "inspect_dropped_msg", "{} ID: {}", stream_key, id,);
+                        match stream_key {
+                            TRANSACTION_STREAM | TXN_BACKFILL => {
+                                metric! {
+                                    statsd_count!("plerkle.messenger.dropped.transaction", 1);
+                                }
+                            }
+                            ACCOUNT_STREAM | ACC_BACKFILL => {
+                                metric! {
+                                    statsd_count!("plerkle.messenger.dropped.account", 1);
+                                }
+                            }
+                            _ => {
+                                warn!(
+                                    "Dropped message for Neither TXN nor ACC stream. Found {}",
+                                    stream_key
+                                );
+                            }
+                        };
+                    }
+                    Err(e) => {
+                        error!(target: "inspect_dropped_msg", "{}", e);
+                        metric! {
+                            statsd_count!("plerkle.messenger.dropped.other", 1);
+                        }
+                    }
+                }
                 continue;
             }
             retained_ids.push(RecvData::new_retry(
@@ -169,7 +201,7 @@ impl Messenger for RedisMessenger {
         let client = redis::Client::open(uri).unwrap();
 
         // Get connection.
-        let connection = client.get_tokio_connection_manager().await.map_err(|e| {
+        let connection = client.get_connection_manager().await.map_err(|e| {
             error!("{}", e.to_string());
             MessengerError::ConnectionError { msg: e.to_string() }
         })?;
@@ -184,7 +216,7 @@ impl Messenger for RedisMessenger {
             .and_then(|id| id.clone().into_string())
             // Using the previous default name when the configuration does not
             // specify any particular consumer_id.
-            .unwrap_or_else(|| String::from("ingester"));
+            .unwrap_or(String::from("ingester"));
 
         let retries = config
             .get("retries")
@@ -208,7 +240,7 @@ impl Messenger for RedisMessenger {
         let consumer_group_name = config
             .get("consumer_group_name")
             .and_then(|r| r.clone().into_string())
-            .unwrap_or_else(|| GROUP_NAME.to_string());
+            .unwrap_or(GROUP_NAME.to_string());
 
         let pipeline_size = config
             .get("pipeline_size_bytes")

@@ -12,11 +12,11 @@ use crate::redis_messenger::RedisMessenger;
 
 /// Some constants that can be used as stream key values.
 pub const ACCOUNT_STREAM: &str = "ACC";
-pub const ACCOUNT_BACKFILL_STREAM: &str = "ACCFILL";
 pub const SLOT_STREAM: &str = "SLT";
 pub const TRANSACTION_STREAM: &str = "TXN";
-pub const TRANSACTION_BACKFILL_STREAM: &str = "TXNFILL";
 pub const BLOCK_STREAM: &str = "BLK";
+pub const ACC_BACKFILL: &str = "ACC_BACKFILL";
+pub const TXN_BACKFILL: &str = "TXN_BACKFILL";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecvData {
@@ -58,7 +58,11 @@ pub trait Messenger: Sync + Send {
     async fn add_stream(&mut self, stream_key: &'static str) -> Result<(), MessengerError>;
     async fn set_buffer_size(&mut self, stream_key: &'static str, max_buffer_size: usize);
     async fn send(&mut self, stream_key: &'static str, bytes: &[u8]) -> Result<(), MessengerError>;
-    async fn recv(&mut self, stream_key: &'static str, consumption_type: ConsumptionType) -> Result<Vec<RecvData>, MessengerError>;
+    async fn recv(
+        &mut self,
+        stream_key: &'static str,
+        consumption_type: ConsumptionType,
+    ) -> Result<Vec<RecvData>, MessengerError>;
     async fn stream_size(&mut self, stream_key: &'static str) -> Result<u64, MessengerError>;
 
     // Ack-ing messages is made a bit awkward by the current interface layout because

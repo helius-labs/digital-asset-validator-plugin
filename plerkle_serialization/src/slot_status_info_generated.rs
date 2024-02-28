@@ -99,7 +99,7 @@ impl<'a> flatbuffers::Verifiable for Status {
 
 impl flatbuffers::SimpleToVerifyInSlice for Status {}
 pub enum SlotStatusInfoOffset {}
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq)]
 
 pub struct SlotStatusInfo<'a> {
   pub _tab: flatbuffers::Table<'a>,

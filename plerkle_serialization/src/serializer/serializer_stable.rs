@@ -5,9 +5,9 @@ use crate::solana_geyser_plugin_interface_shims::{
 use crate::{
     AccountInfo, AccountInfoArgs, BlockInfo, BlockInfoArgs, CompiledInnerInstruction,
     CompiledInnerInstructionArgs, CompiledInnerInstructions, CompiledInnerInstructionsArgs,
-    CompiledInstruction, CompiledInstructionArgs,
-    Pubkey as FBPubkey, Pubkey, SlotStatusInfo, SlotStatusInfoArgs, Status as FBSlotStatus,
-    TransactionInfo, TransactionInfoArgs, TransactionVersion,
+    CompiledInstruction, CompiledInstructionArgs, Pubkey as FBPubkey, Pubkey, SlotStatusInfo,
+    SlotStatusInfoArgs, Status as FBSlotStatus, TransactionInfo, TransactionInfoArgs,
+    TransactionVersion,
 };
 use chrono::Utc;
 use flatbuffers::{FlatBufferBuilder, WIPOffset};
@@ -107,7 +107,7 @@ pub fn serialize_transaction<'a>(
             account_keys_fb_vec.push(pubkey);
         }
 
-        if !account_keys_fb_vec.is_empty() {
+        if account_keys_fb_vec.len() > 0 {
             Some(builder.create_vector(&account_keys_fb_vec))
         } else {
             None
@@ -302,7 +302,7 @@ pub fn seralize_encoded_transaction_with_status<'a>(
                 }
             }
         }
-        if !account_keys_fb_vec.is_empty() {
+        if account_keys_fb_vec.len() > 0 {
             Some(builder.create_vector(&account_keys_fb_vec))
         } else {
             None
@@ -411,7 +411,7 @@ pub fn seralize_encoded_transaction_with_status<'a>(
             inner_instructions: None,
             outer_instructions,
             slot: tx.slot,
-            seen_at: 0,
+            seen_at: Utc::now().timestamp_millis(),
             slot_index: None,
             signature: Some(sig_db),
             compiled_inner_instructions: inner_instructions,

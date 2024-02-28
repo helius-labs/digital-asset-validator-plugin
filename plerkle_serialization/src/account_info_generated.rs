@@ -11,7 +11,7 @@ extern crate flatbuffers;
 use self::flatbuffers::{EndianScalar, Follow};
 
 pub enum AccountInfoOffset {}
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq)]
 
 pub struct AccountInfo<'a> {
   pub _tab: flatbuffers::Table<'a>,

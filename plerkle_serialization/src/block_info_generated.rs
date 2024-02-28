@@ -103,7 +103,7 @@ impl<'a> flatbuffers::Verifiable for RewardType {
 
 impl flatbuffers::SimpleToVerifyInSlice for RewardType {}
 pub enum RewardOffset {}
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq)]
 
 pub struct Reward<'a> {
   pub _tab: flatbuffers::Table<'a>,
@@ -268,7 +268,7 @@ impl core::fmt::Debug for Reward<'_> {
   }
 }
 pub enum BlockInfoOffset {}
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq)]
 
 pub struct BlockInfo<'a> {
   pub _tab: flatbuffers::Table<'a>,

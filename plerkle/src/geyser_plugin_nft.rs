@@ -9,11 +9,11 @@ use figment::{providers::Env, Figment};
 use flatbuffers::FlatBufferBuilder;
 use plerkle_messenger::{
     select_messenger, MessengerConfig, ACCOUNT_STREAM, BLOCK_STREAM, SLOT_STREAM,
-    TRANSACTION_STREAM,
+    TRANSACTION_STREAM, ACC_BACKFILL, TXN_BACKFILL
 };
-use plerkle_serialization::{serializer::{
+use plerkle_serialization::serializer::{
     serialize_account, serialize_block, serialize_transaction,
-}};
+};
 use serde::Deserialize;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
@@ -48,12 +48,13 @@ struct SerializedData<'a> {
 #[derive(Default)]
 pub struct SlotStore {
     parents: BTreeSet<u64>,
+    slot_expiry: u64,
 }
-const SLOT_EXPIRY: u64 = 600 * 2;
 impl SlotStore {
-    pub fn new() -> Self {
+    pub fn new(slot_expiry: u64) -> Self {
         SlotStore {
             parents: BTreeSet::new(),
+            slot_expiry
         }
     }
 
@@ -62,14 +63,14 @@ impl SlotStore {
     }
 
     pub fn needs_purge(&self, current_slot: u64) -> Option<Vec<u64>> {
-        if current_slot <= SLOT_EXPIRY {
+        if current_slot <= self.slot_expiry {
             //just in case we do some testing
             return None;
         }
 
         let rng = self
             .parents
-            .range((Included(0), Included(current_slot - SLOT_EXPIRY)))
+            .range((Included(0), Included(current_slot - self.slot_expiry)))
             .cloned()
             .collect();
         Some(rng)
@@ -96,7 +97,8 @@ pub(crate) struct Plerkle<'a> {
     sender: Option<UnboundedSender<SerializedData<'a>>>,
     started_at: Option<Instant>,
     handle_startup: bool,
-    slots_seen: Arc<Mutex<SlotStore>>,
+    processed_slots: Arc<Mutex<SlotStore>>,
+    confirmed_slots: Arc<Mutex<SlotStore>>,
     account_event_cache: Arc<DashMap<u64, DashMap<Pubkey, (u64, SerializedData<'a>)>>>,
     transaction_event_cache: Arc<DashMap<u64, DashMap<Signature, (u64, SerializedData<'a>)>>>,
     conf_level: Option<SlotStatus>,
@@ -126,7 +128,16 @@ impl<'a> PlerklePrivateMethods for Plerkle<'a> {
                      block_time: block_info.block_time,
                      block_height: block_info.block_height,
                      executed_transaction_count: 0,
-                }
+                },
+            ReplicaBlockInfoVersions::V0_0_3(block_info) => plerkle_serialization::solana_geyser_plugin_interface_shims::ReplicaBlockInfoV2 {
+                parent_slot: 0,
+                parent_blockhash: "",
+                slot: block_info.slot,
+                blockhash: block_info.blockhash,
+                block_time: block_info.block_time,
+                block_height: block_info.block_height,
+                executed_transaction_count: 0,
+            }
         }
     }
 }
@@ -158,9 +169,15 @@ pub struct PluginConfig {
     pub slot_stream_size: Option<usize>,
     pub transaction_stream_size: Option<usize>,
     pub block_stream_size: Option<usize>,
+    pub acc_backfill_stream_size: Option<usize>,
+    pub txn_backfill_stream_size: Option<usize>,
 }
 
 const NUM_WORKERS: usize = 5;
+// Hold approximately 20s process records seconds of data in memory.
+// If the send queue backlog is bigger than 20s, we risk missing data.
+const PROCESSED_SLOT_EXPIRY: u64 = 50;
+const CONFIRMED_SLOT_EXPIRY: u64 = 5;
 
 impl<'a> Plerkle<'a> {
     pub fn new() -> Self {
@@ -172,7 +189,8 @@ impl<'a> Plerkle<'a> {
             sender: None,
             started_at: None,
             handle_startup: false,
-            slots_seen: Arc::new(Mutex::new(SlotStore::new())),
+            processed_slots: Arc::new(Mutex::new(SlotStore::new(PROCESSED_SLOT_EXPIRY))),
+            confirmed_slots: Arc::new(Mutex::new(SlotStore::new(CONFIRMED_SLOT_EXPIRY))),
             account_event_cache: Arc::new(DashMap::new()),
             transaction_event_cache: Arc::new(DashMap::new()),
             conf_level: None,
@@ -228,7 +246,13 @@ impl<'a> Plerkle<'a> {
             } else {
                 Vec::default()
             };
-            AccountsSelector::new(&accounts, &owners)
+            let token_account_closure = &accounts_selector["token_account_closure"];
+            let token_account_closure: bool = if token_account_closure.is_boolean() {
+                token_account_closure.as_bool().unwrap_or_default()
+            } else {
+                false
+            };
+            AccountsSelector::new(&accounts, &owners, token_account_closure)
         }
     }
 
@@ -379,10 +403,14 @@ impl GeyserPlugin for Plerkle<'static> {
                 msg.add_stream(SLOT_STREAM).await;
                 msg.add_stream(TRANSACTION_STREAM).await;
                 msg.add_stream(BLOCK_STREAM).await;
+                msg.add_stream(ACC_BACKFILL).await;
+                msg.add_stream(TXN_BACKFILL).await;
                 msg.set_buffer_size(ACCOUNT_STREAM, config.account_stream_size.unwrap_or(100_000_000)).await;
                 msg.set_buffer_size(SLOT_STREAM, config.slot_stream_size.unwrap_or(100_000)).await;
                 msg.set_buffer_size(TRANSACTION_STREAM, config.transaction_stream_size.unwrap_or(10_000_000)).await;
                 msg.set_buffer_size(BLOCK_STREAM, config.block_stream_size.unwrap_or(100_000)).await;
+                msg.set_buffer_size(ACC_BACKFILL, config.acc_backfill_stream_size.unwrap_or(100_000_000)).await;
+                msg.set_buffer_size(TXN_BACKFILL, config.txn_backfill_stream_size.unwrap_or(10_000_000)).await;
                 let chan_msg = (recv, msg);
                 // Idempotent call to add streams.
                 messenger_workers.push(chan_msg);
@@ -402,7 +430,20 @@ impl GeyserPlugin for Plerkle<'static> {
                                 "stream" => data.stream
                             );
                         };
-                        let _ = messenger.send(data.stream, bytes).await;
+                        let res = messenger.send(data.stream, bytes).await;
+                        match res {
+                            Ok(_) => {
+                                metric! {
+                                    statsd_count!("plerkle.send_success", 1);
+                                }
+                            },
+                            Err(e) => {
+                                metric! {
+                                    statsd_count!("plerkle.send_error", 1, "error" => "redis_send_error");
+                                }
+                                error!("Error sending data: {}", e); 
+                            }
+                        }
                         metric! {
                             statsd_time!(
                                 "message_send_latency",
@@ -434,7 +475,7 @@ impl GeyserPlugin for Plerkle<'static> {
                             metric! {
                                 statsd_count!("plerkle.send_error", 1, "error" => "broadcast_send_error");
                             }
-                            error!("Error sending data: {}", e);
+                            error!("Error broadcasting data: {}", e);
                         }
                     }
                     last_idx = (last_idx + 1) % worker_senders.len();
@@ -504,13 +545,18 @@ impl GeyserPlugin for Plerkle<'static> {
             }
         };
         if let Some(accounts_selector) = &self.accounts_selector {
-            if !accounts_selector.is_account_selected(account.pubkey, account.owner) {
+            if !accounts_selector.is_account_selected(
+                account.pubkey,
+                account.owner,
+                account.lamports,
+            ) {
                 return Ok(());
             }
             trace!(
-                "account selected: pubkey: {:?}, owner: {:?}",
-                account.pubkey,
-                account.owner
+                "account selected: pubkey: {:?}, owner: {:?}, lamports{:?}",
+                bs58::encode(account.pubkey).into_string(),
+                bs58::encode(account.owner).into_string(),
+                account.lamports
             );
         } else {
             return Err(GeyserPluginError::ConfigFileReadError {
@@ -527,8 +573,12 @@ impl GeyserPlugin for Plerkle<'static> {
             let s = is_startup.to_string();
             statsd_count!("account_seen_event", 1, "owner" => &owner, "is_startup" => &s);
         };
+        let stream_key = match is_startup {
+            true => ACC_BACKFILL,
+            false => ACCOUNT_STREAM,
+        };
         let data = SerializedData {
-            stream: ACCOUNT_STREAM,
+            stream: stream_key,
             builder,
             seen_at: seen,
         };
@@ -538,13 +588,13 @@ impl GeyserPlugin for Plerkle<'static> {
         if is_startup {
             Plerkle::send(sender, runtime, data)?;
         } else {
-            let account_key = Pubkey::try_from(account.pubkey).expect("valid Pubkey");
+            let account_key = Pubkey::new(account.pubkey);
             let cache = self.account_event_cache.get_mut(&slot);
             if let Some(cache) = cache {
                 if cache.contains_key(&account_key) {
                     cache.alter(&account_key, |_, v| {
                         if account.write_version > v.0 {
-                            (account.write_version, data)
+                            return (account.write_version, data);
                         } else {
                             v
                         }
@@ -580,7 +630,7 @@ impl GeyserPlugin for Plerkle<'static> {
     ) -> solana_geyser_plugin_interface::geyser_plugin_interface::Result<()> {
         info!("Slot status update: {:?} {:?}", slot, status);
         if status == SlotStatus::Processed && parent.is_some() {
-            let mut seen = self.slots_seen.lock()
+            let mut seen = self.processed_slots.lock()
                 .map_err(|e| PlerkleError::SlotsSeenLockError { msg: e.to_string() })?;
             seen.insert(parent.unwrap())
         }
@@ -590,8 +640,7 @@ impl GeyserPlugin for Plerkle<'static> {
             if let Some((_, events)) = slot_map {
                 info!("Sending Account events for SLOT: {:?}", slot);
                 for (_, event) in events.into_iter() {
-                    info!("Sending Account event for stream: {:?}", event.1.stream);
-                    let sender = self.get_sender_clone()?;
+                    let sender: UnboundedSender<SerializedData<'_>> = self.get_sender_clone()?;
                     let runtime = self.get_runtime()?;
                     Plerkle::send(sender, runtime, event.1)?;
                 }
@@ -601,30 +650,59 @@ impl GeyserPlugin for Plerkle<'static> {
             if let Some((_, events)) = tx_slot_map {
                 info!("Sending Transaction events for SLOT: {:?}", slot);
                 for (_, event) in events.into_iter() {
-                    info!("Sending Transction event for stream: {:?}", event.1.stream);
                     let sender = self.get_sender_clone()?;
                     let runtime = self.get_runtime()?;
                     Plerkle::send(sender, runtime, event.1)?;
                 }
             }
 
-            let mut seen: std::sync::MutexGuard<'_, SlotStore> = self.slots_seen.lock()
-                .map_err(|e| PlerkleError::SlotsSeenLockError { msg: e.to_string() })?;
-            let slots_to_purge = seen.needs_purge(slot);
-            if let Some(purgable) = slots_to_purge {
-                debug!("Purging slots: {:?}", purgable);
-                for slot in &purgable {
-                    seen.remove(*slot);
-                }
-
-                let cl = self.account_event_cache.clone();
-                let tl = self.transaction_event_cache.clone();
-                self.get_runtime()?.spawn(async move {
-                    for s in purgable {
-                        cl.remove(&s);
-                        tl.remove(&s);
+            // Check for race conditions for old confirmed slots.
+            // E.g. Account processing takes longer than slot confirmation processing, meaning that a valid update is stuck in the cache.
+            {
+                let mut seen: std::sync::MutexGuard<'_, SlotStore> = self.confirmed_slots.lock()
+                    .map_err(|e| PlerkleError::SlotsSeenLockError { msg: e.to_string() })?;
+                let slots_to_purge = seen.needs_purge(slot - 1);
+                if let Some(purgable) = slots_to_purge {
+                    debug!("Check confirmed slots: {:?}", purgable);
+                    for slot in &purgable {
+                        if let Some((_, events)) = self.account_event_cache.remove(&slot) {
+                            info!("stale events found for SLOT: {:?}", slot);
+                            metric! {
+                                statsd_count!("stale_account_seen", events.len() as i64);
+                            }
+                            // TODO: Uncomment after more data is collected.
+                            // for (_, event) in events.into_iter() {
+                            //     info!("Sending Account event for stream: {:?}", event.1.stream);
+                            //     let sender: UnboundedSender<SerializedData<'_>> = self.get_sender_clone()?;
+                            //     let runtime = self.get_runtime()?;
+                            //     Plerkle::send(sender, runtime, event.1)?;
+                            // }
+                        }
                     }
-                });
+                }
+                seen.insert(slot);
+            }
+
+            // Clear out old processed slots that were never confirmed, ensuring no memory leak.
+            {
+                let mut seen: std::sync::MutexGuard<'_, SlotStore> = self.processed_slots.lock()
+                    .map_err(|e| PlerkleError::SlotsSeenLockError { msg: e.to_string() })?;
+                let slots_to_purge = seen.needs_purge(slot);
+                if let Some(purgable) = slots_to_purge {
+                    debug!("Purging slots: {:?}", purgable);
+                    for slot in &purgable {
+                        seen.remove(*slot);
+                    }
+
+                    let cl = self.account_event_cache.clone();
+                    let tl = self.transaction_event_cache.clone();
+                    self.get_runtime()?.spawn(async move {
+                        for s in purgable {
+                            cl.remove(&s);
+                            tl.remove(&s);
+                        }
+                    });
+                }
             }
         }
         Ok(())
@@ -679,22 +757,22 @@ impl GeyserPlugin for Plerkle<'static> {
             "matched transaction"
         );
         // Get runtime and sender channel.
-        let _runtime = self.get_runtime()?;
-        let _sender = self.get_sender_clone()?;
+        let _ = self.get_runtime()?;
+        let _ = self.get_sender_clone()?;
 
         // Serialize data.
         let builder = FlatBufferBuilder::new();
         let builder = serialize_transaction(builder, transaction_info, slot);
 
         // Push transaction events to queue
-        let signature = *transaction_info.signature;
+        let signature = transaction_info.signature.clone();
         let cache = self.transaction_event_cache.get_mut(&slot);
 
         let index = transaction_info.index.try_into().unwrap_or(0);
         let data = SerializedData {
             stream: TRANSACTION_STREAM,
             builder,
-            seen_at: seen,
+            seen_at: seen.clone(),
         };
         if let Some(cache) = cache {
             if cache.contains_key(&signature) {
